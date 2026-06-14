@@ -1,0 +1,5 @@
+*.xlsx
+*.txt
+*.csv
+.venv
+db.sqlite3
