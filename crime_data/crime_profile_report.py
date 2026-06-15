@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import statistics
+import threading
 from pathlib import Path
 
 import django
@@ -21,6 +22,11 @@ PERIOD_TYPE = 'quarter_total'
 MIN_NEARBY_PRECINCTS = 5
 MAX_NEARBY_PRECINCTS = 12
 LOW_COUNT_TREND_THRESHOLD = 5
+
+QWEN_MODEL_ID = 'Qwen/Qwen3-8B'
+QWEN_MAX_NEW_TOKENS = 900
+QWEN_RUNTIME_PROFILE = 'crime_report'
+
 
 OVERALL_CATEGORIES = [
     '17 Community reported serious Crime',
@@ -1362,10 +1368,156 @@ def format_crime_report_text(report):
     return '\n'.join(lines).strip() + '\n'
 
 
+
+CRIME_LABEL_SYSTEM_PROMPT = 'You convert a crime report into search-friendly safety labels.\nKeep the same section headings and order.\nUnder each heading, write short labels, one per line.\nUse only the report evidence.\nReturn only the headings and labels.'
+
+_qwen_crime_label_model = None
+_qwen_crime_label_model_lock = threading.Lock()
+
+
+class QwenCrimeLabelModel:
+    """Load Qwen3 8B for crime-label generation."""
+
+    def __init__(self):
+        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        import torch
+
+        self.torch = torch
+        self.tokenizer = AutoTokenizer.from_pretrained(QWEN_MODEL_ID)
+        self.tokenizer.padding_side = 'left'
+
+        model_kwargs = {
+            'dtype': 'auto',
+            'device_map': self.get_device_map(),
+        }
+
+        if torch.cuda.is_available():
+            model_kwargs['quantization_config'] = BitsAndBytesConfig(load_in_8bit=True)
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            QWEN_MODEL_ID,
+            **model_kwargs,
+        )
+        self.model.eval()
+
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        self.generation_lock = threading.RLock()
+        self.print_loaded_device()
+
+    def get_device_map(self):
+        if self.torch.cuda.is_available():
+            return {'': 'cuda:0'}
+        return {'': 'cpu'}
+
+    def get_input_device(self):
+        device_map = getattr(self.model, 'hf_device_map', None)
+
+        if isinstance(device_map, dict):
+            devices = {
+                str(device)
+                for device in device_map.values()
+                if str(device) not in ('disk', '')
+            }
+            if len(devices) == 1:
+                return self.torch.device(next(iter(devices)))
+
+        model_device = getattr(self.model, 'device', None)
+        if model_device is not None:
+            return model_device
+
+        return next(self.model.parameters()).device
+
+    def print_loaded_device(self):
+        device = self.get_input_device()
+        print(f'[qwen] loaded {QWEN_MODEL_ID} for crime labels on {device}')
+
+    def build_chat_prompt(self, system_prompt, crime_report_text):
+        messages = [
+            {'role': 'system', 'content': str(system_prompt or '').strip()},
+            {'role': 'user', 'content': str(crime_report_text or '').strip()},
+        ]
+        return self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+
+    def generate_labels(self, crime_report_text, max_new_tokens=QWEN_MAX_NEW_TOKENS):
+        prompt = self.build_chat_prompt(CRIME_LABEL_SYSTEM_PROMPT, crime_report_text)
+        inputs = self.tokenizer([prompt], padding=True, return_tensors='pt')
+        inputs = inputs.to(self.get_input_device())
+        input_length = inputs['input_ids'].shape[1]
+
+        with self.generation_lock:
+            with self.torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                )
+
+        answer_ids = outputs[0][input_length:]
+        answer = self.tokenizer.decode(
+            answer_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+        return clean_model_output(answer)
+
+
+def clean_model_output(text):
+    text = str(text or '').strip()
+
+    if text.startswith('<think>') and '</think>' in text:
+        text = text.split('</think>', 1)[1].strip()
+
+    return text
+
+
+def get_qwen_crime_label_model():
+    global _qwen_crime_label_model
+
+    if _qwen_crime_label_model is None:
+        with _qwen_crime_label_model_lock:
+            if _qwen_crime_label_model is None:
+                _qwen_crime_label_model = QwenCrimeLabelModel()
+
+    return _qwen_crime_label_model
+
+
+def generate_crime_labels_from_report(crime_report_text, max_new_tokens=QWEN_MAX_NEW_TOKENS):
+    model = get_qwen_crime_label_model()
+    return model.generate_labels(crime_report_text, max_new_tokens=max_new_tokens)
+
+
 def print_crime_report(location):
     report = get_crime_report(location)
     print(format_crime_report_text(report))
 
 
+def print_crime_report_and_labels(location):
+    report = get_crime_report(location)
+    crime_report_text = format_crime_report_text(report)
+
+    print('===== CRIME REPORT RAG DOCUMENT =====')
+    print(crime_report_text)
+
+    if report.get('status') != 'available':
+        print('===== QWEN LABEL OUTPUT =====')
+        print('')
+        return
+
+    labels = generate_crime_labels_from_report(crime_report_text)
+
+    print('===== QWEN LABEL OUTPUT =====')
+    print(labels)
+    print('')
+
+
 if __name__ == '__main__':
-    print_crime_report(DEFAULT_TEST_LOCATION)
+    print_crime_report_and_labels(DEFAULT_TEST_LOCATION)
