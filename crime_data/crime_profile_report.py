@@ -16,7 +16,7 @@ PROJECT_SETTINGS_MODULE = 'Ekhaya_crime_dataset.settings'
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
 
-DEFAULT_TEST_LOCATION = 'Fish Hoek'
+DEFAULT_TEST_LOCATION = 'Khayelitsha'
 PERIOD_TYPE = 'quarter_total'
 MIN_NEARBY_PRECINCTS = 5
 MAX_NEARBY_PRECINCTS = 12
@@ -693,7 +693,7 @@ def build_solo_living_safety(report_sections):
         'position': position,
         'composite_score': safe_round(score),
         'composite_components': components,
-        'interpretation_basis': 'Derived from direct personal safety, residential security, public movement safety, and vehicle security. This is not demographic-specific and should not be worded as a guarantee.',
+        'interpretation_basis': 'Composite assessment from direct personal safety, residential security, public movement safety, and vehicle security.',
     }
 
 
@@ -709,7 +709,7 @@ def build_family_safety(report_sections):
         'position': position,
         'composite_score': safe_round(score),
         'composite_components': components,
-        'interpretation_basis': 'Derived from crime-side safety indicators only. It does not include schools, parks, traffic safety, childcare, or family amenities.',
+        'interpretation_basis': 'Composite assessment from overall safety, direct personal safety, residential security, and public movement safety.',
     }
 
 
@@ -807,11 +807,11 @@ def build_data_confidence_and_coverage(report_context, report_sections):
     )
 
     if overall_confidence == 'high':
-        language_guidance = 'The LLM can use direct but non-guarantee language.'
+        language_guidance = 'High confidence.'
     elif overall_confidence == 'medium':
-        language_guidance = 'The LLM should use moderate, comparison-based language.'
+        language_guidance = 'Medium confidence.'
     else:
-        language_guidance = 'The LLM should use cautious language and avoid strong claims.'
+        language_guidance = 'Low confidence.'
 
     return {
         'overall_report_confidence': overall_confidence,
@@ -974,12 +974,12 @@ TREND_DISPLAY_NAMES = {
 }
 
 
-# LLM report rendering
+# RAG report rendering
 # --------------------
 # get_crime_report() returns a structured internal Python dictionary.
-# format_crime_report_text() converts that dictionary into clean, human-readable
-# evidence text for the language model. The model should not see snake_case keys,
-# nested schema paths, row counts, or developer-facing names.
+# format_crime_report_text() turns that dictionary into a clean evidence document.
+# This text is intended to be passed to the language model as context, not as a
+# list of task instructions. The system prompt should handle the actual label task.
 
 
 def display_position(position):
@@ -996,19 +996,6 @@ def display_trend(position):
 
 def display_category_name(name):
     return CATEGORY_DISPLAY_NAMES.get(name, str(name).replace('_', ' '))
-
-
-def formatted_number(value, suffix=''):
-    if value is None:
-        return ''
-    return f'{value}{suffix}'
-
-
-def sentence_case(value):
-    if not value:
-        return ''
-    value = str(value)
-    return value[0].upper() + value[1:]
 
 
 def add_subsection(lines, title, body_lines):
@@ -1031,9 +1018,19 @@ def add_subsection(lines, title, body_lines):
 
 def categories_lines(section):
     categories = section.get('categories_used') or []
+    return [str(category) for category in categories]
+
+
+def area_result_lines(section):
     lines = []
-    for category in categories:
-        lines.append(str(category))
+    position = section.get('position')
+    target_value = section.get('target_value')
+
+    if position:
+        lines.append(f'Reported concern level: {display_position(position)}.')
+    if target_value is not None:
+        lines.append(f'Weighted reported incident estimate for the area: {target_value}.')
+
     return lines
 
 
@@ -1042,35 +1039,22 @@ def comparison_lines(section):
     cape_town_percentile = section.get('cape_town_percentile')
     ratio_to_cape_town = section.get('ratio_to_cape_town_median')
     western_cape_percentile = section.get('western_cape_percentile')
+    nearby_position = section.get('nearby_position')
     nearby_percentile = section.get('nearby_percentile')
     ratio_to_nearby = section.get('ratio_to_nearby_median')
-    nearby_position = section.get('nearby_position')
 
     if cape_town_percentile is not None:
-        lines.append(f'Cape Town-linked comparison: {cape_town_percentile}th percentile. Lower percentiles indicate fewer reported incidents than more comparison precincts.')
+        lines.append(f'Cape Town-linked precinct comparison: {cape_town_percentile}th percentile.')
     if ratio_to_cape_town is not None:
-        lines.append(f'Compared with the Cape Town-linked median, this area is at {ratio_to_cape_town} times the median reported incident level.')
+        lines.append(f'Cape Town-linked median ratio: {ratio_to_cape_town}.')
     if western_cape_percentile is not None:
-        lines.append(f'Western Cape comparison: {western_cape_percentile}th percentile.')
+        lines.append(f'Western Cape precinct comparison: {western_cape_percentile}th percentile.')
     if nearby_position:
-        lines.append(f'Nearby-area comparison: {display_nearby_position(nearby_position)}.')
+        lines.append(f'Nearby comparison precinct result: {display_nearby_position(nearby_position)}.')
     if nearby_percentile is not None:
-        lines.append(f'Nearby percentile: {nearby_percentile}th percentile among nearby comparison precincts.')
+        lines.append(f'Nearby comparison percentile: {nearby_percentile}th percentile.')
     if ratio_to_nearby is not None:
-        lines.append(f'Compared with the nearby-area median, this area is at {ratio_to_nearby} times the median reported incident level.')
-
-    return lines
-
-
-def area_result_lines(section):
-    lines = []
-    target_value = section.get('target_value')
-    position = section.get('position')
-
-    if position:
-        lines.append(f'This category is assessed as {display_position(position)}.')
-    if target_value is not None:
-        lines.append(f'Weighted reported incidents for the area: {target_value}.')
+        lines.append(f'Nearby median ratio: {ratio_to_nearby}.')
 
     return lines
 
@@ -1080,22 +1064,23 @@ def supporting_indicator_lines(section):
     lines = []
 
     for name, values in indicators.items():
-        display_name = display_category_name(name)
         if name == 'sexual_offences':
-            display_name = 'Sexual offences supporting indicator'
-        if name == 'malicious_damage_to_property':
-            display_name = 'Damage to property supporting indicator'
+            display_name = 'Sexual offences'
+        elif name == 'malicious_damage_to_property':
+            display_name = 'Damage to property'
+        else:
+            display_name = display_category_name(name)
 
         categories = values.get('categories_used') or []
         target_value = values.get('target_value')
         category_text = ', '.join(categories)
 
         if category_text and target_value is not None:
-            lines.append(f'{display_name}: {category_text}; weighted reported incidents: {target_value}.')
+            lines.append(f'{display_name}: {category_text}; weighted reported incident estimate: {target_value}.')
         elif category_text:
             lines.append(f'{display_name}: {category_text}.')
         elif target_value is not None:
-            lines.append(f'{display_name}: weighted reported incidents: {target_value}.')
+            lines.append(f'{display_name}: weighted reported incident estimate: {target_value}.')
 
     return lines
 
@@ -1109,81 +1094,11 @@ def component_lines(section):
         position = display_position(item.get('position'))
         weight = item.get('weight')
         if name and position and weight is not None:
-            lines.append(f'{name}: {position}; weighting in this assessment: {int(weight * 100)}%.')
+            lines.append(f'{name}: {position}; assessment weight: {int(weight * 100)}%.')
         elif name and position:
             lines.append(f'{name}: {position}.')
 
     return lines
-
-
-def label_guidance_for_section(section_key, section):
-    position = section.get('position')
-    nearby_position = section.get('nearby_position')
-    lines = []
-
-    if section_key == 'overall_safety':
-        lines.append('Generate broad area-safety labels that match searches for safe areas, low-crime suburbs, or safety-first property searches.')
-    elif section_key == 'direct_personal_safety':
-        lines.append('Generate labels about direct personal safety only; do not describe home security or vehicle security here.')
-    elif section_key == 'residential_security':
-        lines.append('Generate labels about home security, residential break-in concern, and secure residential living.')
-    elif section_key == 'vehicle_security':
-        lines.append('Generate labels about car safety, vehicle theft concern, and parking-related security.')
-    elif section_key == 'public_movement_safety':
-        lines.append('Generate labels about crime-related safety while moving around the area, walking, arriving home, or using public spaces.')
-    elif section_key == 'solo_living_safety':
-        lines.append('Generate labels for safety-conscious solo living, but avoid demographic guarantees and avoid saying an area is guaranteed safe for any group.')
-    elif section_key == 'family_safety':
-        lines.append('Generate labels about family safety from crime indicators only; do not imply school quality, park quality, traffic safety, or family amenities.')
-    elif section_key == 'nearby_safety_comparison':
-        lines.append('Generate labels that explain whether this area compares better, similarly, or worse than nearby alternatives.')
-    elif section_key == 'safety_trend':
-        lines.append('Generate labels only if the trend is meaningful; do not let trend wording override the current safety profile.')
-
-    if position in ['very_low_reported_concern', 'lower_reported_concern']:
-        lines.append('The wording can be positive, but it must remain comparative and not promise safety.')
-    elif position in ['elevated_reported_concern', 'high_reported_concern']:
-        lines.append('The wording should clearly flag this as a concern for safety-focused searches.')
-    elif position == 'typical_reported_concern':
-        lines.append('The wording should be balanced or mixed rather than strongly positive or strongly negative.')
-
-    if nearby_position in ['worse_than_nearby_areas', 'somewhat_worse_than_nearby_areas']:
-        lines.append('Mention that nearby alternatives may offer a stronger safety match where appropriate.')
-
-    return lines
-
-
-def format_standard_category_section(lines, section_key, section):
-    add_subsection(lines, 'Main finding', area_result_lines(section))
-    add_subsection(lines, 'Crime categories used', categories_lines(section))
-    add_subsection(lines, 'Comparison evidence', comparison_lines(section))
-    add_subsection(lines, 'Supporting indicators', supporting_indicator_lines(section))
-    add_subsection(lines, 'Label guidance', label_guidance_for_section(section_key, section))
-
-
-def format_public_movement_section(lines, section):
-    add_subsection(lines, 'Main finding', area_result_lines(section))
-    add_subsection(lines, 'Crime categories used', categories_lines(section))
-    add_subsection(lines, 'Composite basis', component_lines(section))
-    add_subsection(lines, 'Comparison evidence', comparison_lines(section))
-
-    public_robbery_signal = section.get('public_robbery_signal') or {}
-    public_signal_lines = []
-    if public_robbery_signal:
-        position = display_position(public_robbery_signal.get('position'))
-        target_value = public_robbery_signal.get('target_value')
-        nearby_position = display_nearby_position(public_robbery_signal.get('nearby_position'))
-        categories = ', '.join(public_robbery_signal.get('categories_used') or [])
-        if position:
-            public_signal_lines.append(f'Public-facing robbery signal: {position}.')
-        if target_value is not None:
-            public_signal_lines.append(f'Weighted reported incidents for public-facing robbery categories: {target_value}.')
-        if nearby_position:
-            public_signal_lines.append(f'Nearby comparison for public-facing robbery categories: {nearby_position}.')
-        if categories:
-            public_signal_lines.append(f'Public-facing robbery categories used: {categories}.')
-    add_subsection(lines, 'Public-facing robbery signal', public_signal_lines)
-    add_subsection(lines, 'Label guidance', label_guidance_for_section('public_movement_safety', section))
 
 
 def strongest_and_weakest_component_lines(section):
@@ -1206,20 +1121,47 @@ def strongest_and_weakest_component_lines(section):
     return strongest, weakest
 
 
-def format_composite_section(lines, section_key, section):
+def format_standard_category_section(lines, section):
     add_subsection(lines, 'Main finding', area_result_lines(section))
-    add_subsection(lines, 'Composite basis', component_lines(section))
+    add_subsection(lines, 'Crime categories used', categories_lines(section))
+    add_subsection(lines, 'Comparison evidence', comparison_lines(section))
+    add_subsection(lines, 'Supporting evidence', supporting_indicator_lines(section))
+
+
+def format_public_movement_section(lines, section):
+    add_subsection(lines, 'Main finding', area_result_lines(section))
+    add_subsection(lines, 'Crime categories used', categories_lines(section))
+    add_subsection(lines, 'Composite evidence', component_lines(section))
+    add_subsection(lines, 'Comparison evidence', comparison_lines(section))
+
+    public_robbery_signal = section.get('public_robbery_signal') or {}
+    public_signal_lines = []
+    if public_robbery_signal:
+        position = display_position(public_robbery_signal.get('position'))
+        target_value = public_robbery_signal.get('target_value')
+        nearby_position = display_nearby_position(public_robbery_signal.get('nearby_position'))
+        categories = ', '.join(public_robbery_signal.get('categories_used') or [])
+        if position:
+            public_signal_lines.append(f'Public-facing robbery signal: {position}.')
+        if target_value is not None:
+            public_signal_lines.append(f'Weighted reported incident estimate for public-facing robbery categories: {target_value}.')
+        if nearby_position:
+            public_signal_lines.append(f'Nearby comparison precinct result for public-facing robbery categories: {nearby_position}.')
+        if categories:
+            public_signal_lines.append(f'Public-facing robbery categories used: {categories}.')
+    add_subsection(lines, 'Public-facing robbery evidence', public_signal_lines)
+
+
+def format_composite_section(lines, section):
+    add_subsection(lines, 'Main finding', area_result_lines(section))
+    add_subsection(lines, 'Composite evidence', component_lines(section))
 
     strongest, weakest = strongest_and_weakest_component_lines(section)
     add_subsection(lines, 'Strongest supporting signals', strongest)
     add_subsection(lines, 'Weakest supporting signals', weakest)
 
-    scope_lines = []
     basis = section.get('interpretation_basis')
-    if basis:
-        scope_lines.append(basis)
-    add_subsection(lines, 'Scope boundary', scope_lines)
-    add_subsection(lines, 'Label guidance', label_guidance_for_section(section_key, section))
+    add_subsection(lines, 'Assessment basis', [basis])
 
 
 def format_nearby_comparison_section(lines, section):
@@ -1230,7 +1172,7 @@ def format_nearby_comparison_section(lines, section):
     add_subsection(lines, 'Main finding', main_lines)
 
     nearby_precincts = section.get('nearby_precincts_used') or []
-    add_subsection(lines, 'Nearby areas used', nearby_precincts)
+    add_subsection(lines, 'Nearby comparison precincts', nearby_precincts)
 
     comparisons = section.get('category_comparisons') or {}
     better_lines = []
@@ -1246,7 +1188,7 @@ def format_nearby_comparison_section(lines, section):
         if percentile is not None:
             line_parts.append(f'{percentile}th nearby percentile')
         if ratio is not None:
-            line_parts.append(f'{ratio} times the nearby median')
+            line_parts.append(f'nearby median ratio {ratio}')
         line = '; '.join(line_parts) + '.'
 
         if nearby_position in ['better_than_nearby_areas', 'somewhat_better_than_nearby_areas']:
@@ -1259,7 +1201,6 @@ def format_nearby_comparison_section(lines, section):
     add_subsection(lines, 'Better-than-nearby signals', better_lines)
     add_subsection(lines, 'Similar-to-nearby signals', similar_lines)
     add_subsection(lines, 'Worse-than-nearby signals', worse_lines)
-    add_subsection(lines, 'Label guidance', label_guidance_for_section('nearby_safety_comparison', section))
 
 
 def trend_line_for_item(name, item):
@@ -1304,7 +1245,6 @@ def format_safety_trend_section(lines, section):
     add_subsection(lines, 'Improving signals', improving_lines)
     add_subsection(lines, 'Stable or mixed signals', stable_lines)
     add_subsection(lines, 'Worsening signals', worsening_lines)
-    add_subsection(lines, 'Label guidance', label_guidance_for_section('safety_trend', section))
 
 
 def format_confidence_section(lines, section):
@@ -1334,7 +1274,7 @@ def format_confidence_section(lines, section):
         overlap = item.get('overlap_percent')
         if precinct_name and overlap is not None:
             geographic_lines.append(f'{precinct_name}: {overlap}% overlap.')
-    add_subsection(lines, 'Geographic match quality', geographic_lines)
+    add_subsection(lines, 'Geographic match evidence', geographic_lines)
 
     coverage_lines = []
     metric_confidence = section.get('metric_coverage_confidence')
@@ -1363,9 +1303,6 @@ def format_confidence_section(lines, section):
         trend_lines.append(f'Trend confidence: {trend_confidence_value}.')
     add_subsection(lines, 'Trend coverage', trend_lines)
 
-    language_guidance = section.get('language_guidance')
-    add_subsection(lines, 'Language strength guidance', [language_guidance])
-
 
 def format_section_for_llm(lines, heading, section_key, section):
     lines.append(f'[{heading}]')
@@ -1375,11 +1312,11 @@ def format_section_for_llm(lines, heading, section_key, section):
         return
 
     if section_key in ['overall_safety', 'direct_personal_safety', 'residential_security', 'vehicle_security']:
-        format_standard_category_section(lines, section_key, section)
+        format_standard_category_section(lines, section)
     elif section_key == 'public_movement_safety':
         format_public_movement_section(lines, section)
     elif section_key in ['solo_living_safety', 'family_safety']:
-        format_composite_section(lines, section_key, section)
+        format_composite_section(lines, section)
     elif section_key == 'nearby_safety_comparison':
         format_nearby_comparison_section(lines, section)
     elif section_key == 'safety_trend':
@@ -1391,8 +1328,7 @@ def format_section_for_llm(lines, heading, section_key, section):
         lines.append('')
 
 
-def format_crime_report_text(report):
-    lines = []
+def add_report_context(lines, report):
     location = report.get('location')
     status = report.get('status')
     period = report.get('period')
@@ -1406,8 +1342,18 @@ def format_crime_report_text(report):
         lines.append(f'Crime period start: {period_start}')
     if status and status != 'available':
         lines.append(f'Report status: {status}')
-    if lines:
-        lines.append('')
+
+    lines.append('')
+    lines.append('Interpretation notes:')
+    lines.append('- Percentiles compare reported incidents against other precincts. Lower percentiles mean fewer reported incidents in the comparison group.')
+    lines.append('- Median ratios compare reported incidents against the median of the comparison group. Lower ratios mean fewer reported incidents than the comparison median.')
+    lines.append('- Area values are weighted from linked SAPS precincts using geographic overlap percentages.')
+    lines.append('')
+
+
+def format_crime_report_text(report):
+    lines = []
+    add_report_context(lines, report)
 
     sections = report.get('sections', {})
     for heading, section_key in SECTION_ORDER:
