@@ -17,7 +17,7 @@ PROJECT_SETTINGS_MODULE = 'Ekhaya_crime_dataset.settings'
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
 
-DEFAULT_TEST_LOCATION = 'Khayelitsha'
+DEFAULT_TEST_LOCATION = 'Fish Hoek' #'Khayelitsha'
 PERIOD_TYPE = 'quarter_total'
 MIN_NEARBY_PRECINCTS = 5
 MAX_NEARBY_PRECINCTS = 12
@@ -69,6 +69,115 @@ CORE_BASKETS = {
     'vehicle_security': VEHICLE_SECURITY_CATEGORIES,
     'public_robbery_signal': PUBLIC_ROBBERY_CATEGORIES,
 }
+
+
+RAW_CRIME_SIGNAL_DEFINITIONS = [
+    {
+        'key': 'murder',
+        'section_key': 'direct_personal_safety',
+        'categories': ['Murder'],
+        'label_subject': 'reported murder incidents',
+        'concern_subject': 'murder concern',
+    },
+    {
+        'key': 'attempted_murder',
+        'section_key': 'direct_personal_safety',
+        'categories': ['Attempted murder'],
+        'label_subject': 'reported attempted murder incidents',
+        'concern_subject': 'attempted murder concern',
+    },
+    {
+        'key': 'serious_assault',
+        'section_key': 'direct_personal_safety',
+        'categories': ['Assault with the intent to inflict grievous bodily harm'],
+        'label_subject': 'reported serious assault incidents',
+        'concern_subject': 'serious assault concern',
+    },
+    {
+        'key': 'common_assault',
+        'section_key': 'direct_personal_safety',
+        'categories': ['Common assault'],
+        'label_subject': 'reported common assault incidents',
+        'concern_subject': 'common assault concern',
+    },
+    {
+        'key': 'sexual_offences',
+        'section_key': 'direct_personal_safety',
+        'categories': ['Sexual offences'],
+        'label_subject': 'reported sexual offence incidents',
+        'concern_subject': 'sexual offence concern',
+    },
+    {
+        'key': 'common_robbery',
+        'section_key': 'public_movement_safety',
+        'categories': ['Common robbery'],
+        'label_subject': 'reported common robbery incidents',
+        'concern_subject': 'common robbery concern',
+    },
+    {
+        'key': 'aggravated_robbery',
+        'section_key': 'public_movement_safety',
+        'categories': ['Robbery with aggravating circumstances'],
+        'label_subject': 'reported aggravated robbery incidents',
+        'concern_subject': 'aggravated robbery concern',
+    },
+    {
+        'key': 'non_residential_robbery',
+        'section_key': 'public_movement_safety',
+        'categories': ['Robbery at non-residential premises'],
+        'label_subject': 'reported non-residential robbery incidents',
+        'concern_subject': 'non-residential robbery concern',
+    },
+    {
+        'key': 'residential_burglary',
+        'section_key': 'residential_security',
+        'categories': ['Burglary at residential premises'],
+        'label_subject': 'reported residential burglary incidents',
+        'concern_subject': 'residential burglary concern',
+    },
+    {
+        'key': 'residential_robbery',
+        'section_key': 'residential_security',
+        'categories': ['Robbery at residential premises'],
+        'label_subject': 'reported residential robbery incidents',
+        'concern_subject': 'residential robbery concern',
+    },
+    {
+        'key': 'malicious_property_damage',
+        'section_key': 'residential_security',
+        'categories': ['Malicious damage to property'],
+        'label_subject': 'reported malicious property damage incidents',
+        'concern_subject': 'malicious property damage concern',
+    },
+    {
+        'key': 'vehicle_theft',
+        'section_key': 'vehicle_security',
+        'categories': ['Theft of motor vehicle and motorcycle'],
+        'label_subject': 'reported vehicle theft incidents',
+        'concern_subject': 'vehicle theft concern',
+    },
+    {
+        'key': 'theft_from_vehicle',
+        'section_key': 'vehicle_security',
+        'categories': ['Theft out of or from motor vehicle'],
+        'label_subject': 'reported theft from vehicle incidents',
+        'concern_subject': 'theft from vehicle concern',
+    },
+    {
+        'key': 'carjacking',
+        'section_key': 'vehicle_security',
+        'categories': ['Carjacking'],
+        'label_subject': 'reported carjacking incidents',
+        'concern_subject': 'carjacking concern',
+    },
+    {
+        'key': 'truck_hijacking',
+        'section_key': 'vehicle_security',
+        'categories': ['Truck hijacking'],
+        'label_subject': 'reported truck hijacking incidents',
+        'concern_subject': 'truck hijacking concern',
+    },
+]
 
 BASKET_VALUE_CACHE = {}
 GEOMETRY_CACHE = {}
@@ -860,6 +969,7 @@ def blank_report(location, message):
             'safety_trend': {},
             'data_confidence_and_coverage': {},
         },
+        'search_signal_labels': {},
     }
 
 
@@ -916,6 +1026,8 @@ def get_crime_report(location):
     sections['safety_trend'] = build_safety_trend(report_context)
     sections['data_confidence_and_coverage'] = build_data_confidence_and_coverage(report_context, sections)
 
+    search_signal_labels = CrimeSearchLabelBuilder(report_context, sections).build()
+
     return {
         'location': crime_area.area_name,
         'status': 'available',
@@ -923,6 +1035,7 @@ def get_crime_report(location):
         'period': report_context['latest_period_name'],
         'period_start': str(latest_start),
         'sections': sections,
+        'search_signal_labels': search_signal_labels,
     }
 
 
@@ -978,6 +1091,674 @@ TREND_DISPLAY_NAMES = {
     'insufficient_or_noisy_signal': 'insufficient or noisy signal',
     'insufficient_periods': 'insufficient comparison periods',
 }
+
+class CrimeSearchLabelBuilder:
+    """Build deterministic search enrichment labels from the crime report data."""
+
+    def __init__(self, report_context, sections):
+        self.report_context = report_context
+        self.sections = sections
+        self.labels = {}
+        for heading, section_key in SECTION_ORDER:
+            self.labels[section_key] = []
+        self.raw_signals = self.build_raw_signals()
+
+    def build(self):
+        self.add_overall_safety_labels()
+        self.add_direct_personal_safety_labels()
+        self.add_residential_security_labels()
+        self.add_vehicle_security_labels()
+        self.add_public_movement_safety_labels()
+        self.add_solo_living_safety_labels()
+        self.add_family_safety_labels()
+        self.add_nearby_safety_comparison_labels()
+        self.add_safety_trend_labels()
+        self.add_data_confidence_and_coverage_labels()
+        self.add_compound_profile_labels()
+        return self.dedupe_labels_by_section()
+
+    def build_raw_signals(self):
+        signals = {}
+        for definition in RAW_CRIME_SIGNAL_DEFINITIONS:
+            analysis = basic_basket_analysis(
+                self.report_context['import_run'],
+                self.report_context['precinct_weights'],
+                definition['categories'],
+                self.report_context['latest_period_start'],
+                self.report_context['nearby_precincts'],
+                self.report_context['cape_town_precincts'],
+                self.report_context['province_precincts'],
+            )
+
+            if analysis.get('metric_row_count') == 0:
+                continue
+
+            trend = trend_for_basket(
+                self.report_context['import_run'],
+                self.report_context['precinct_weights'],
+                definition['categories'],
+                self.report_context['period_starts'],
+            )
+
+            signal = dict(definition)
+            signal['analysis'] = analysis
+            signal['trend'] = trend
+            signals[definition['key']] = signal
+
+        return signals
+
+    def section(self, section_key):
+        return self.sections.get(section_key, {}) or {}
+
+    def add(self, section_key, label):
+        label = str(label or '').strip()
+        if not label:
+            return
+        self.labels.setdefault(section_key, [])
+        self.labels[section_key].append(label)
+
+    def dedupe_labels_by_section(self):
+        clean = {}
+        for section_key, labels in self.labels.items():
+            seen = set()
+            clean_labels = []
+            for label in labels:
+                key = label.lower().strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                clean_labels.append(label)
+            clean[section_key] = clean_labels
+        return clean
+
+    def concern_scale(self, section):
+        percentile = section.get('cape_town_percentile')
+        position = section.get('position')
+
+        if percentile is not None:
+            return self.scale_from_percentile(percentile)
+
+        return self.scale_from_position(position)
+
+    def scale_from_position(self, position):
+        if position == 'very_low_reported_concern':
+            return 'very low'
+        if position == 'lower_reported_concern':
+            return 'lower'
+        if position == 'typical_reported_concern':
+            return 'typical'
+        if position == 'elevated_reported_concern':
+            return 'elevated'
+        if position == 'high_reported_concern':
+            return 'high'
+        return ''
+
+    def scale_from_percentile(self, percentile):
+        if percentile is None:
+            return ''
+        if percentile <= 10:
+            return 'very low'
+        if percentile <= 20:
+            return 'low'
+        if percentile <= 40:
+            return 'lower'
+        if percentile <= 60:
+            return 'typical'
+        if percentile <= 80:
+            return 'elevated'
+        if percentile <= 90:
+            return 'high'
+        return 'very high'
+
+    def is_concern_scale(self, scale):
+        return scale in ['elevated', 'high', 'very high']
+
+    def is_strength_scale(self, scale):
+        return scale in ['very low', 'low', 'lower']
+
+    def is_concern_position(self, position):
+        return position in ['elevated_reported_concern', 'high_reported_concern']
+
+    def is_strength_position(self, position):
+        return position in ['very_low_reported_concern', 'lower_reported_concern']
+
+    def concern_word_from_position(self, position):
+        if position == 'high_reported_concern':
+            return 'high'
+        if position == 'elevated_reported_concern':
+            return 'elevated'
+        if position == 'typical_reported_concern':
+            return 'typical'
+        if position == 'lower_reported_concern':
+            return 'lower'
+        if position == 'very_low_reported_concern':
+            return 'very low'
+        return ''
+
+    def ratio_label(self, subject, ratio):
+        if ratio is None:
+            return ''
+        if ratio >= 3:
+            return f'{subject} much higher than Cape Town median'
+        if ratio >= 2:
+            return f'{subject} far above Cape Town median'
+        if ratio >= 1.25:
+            return f'{subject} above Cape Town median'
+        if ratio <= 0.5:
+            return f'{subject} far below Cape Town median'
+        if ratio <= 0.8:
+            return f'{subject} below Cape Town median'
+        return ''
+
+    def nearby_label(self, subject, nearby_position):
+        if nearby_position == 'better_than_nearby_areas':
+            return f'{subject} better than nearby comparison areas'
+        if nearby_position == 'somewhat_better_than_nearby_areas':
+            return f'{subject} somewhat better than nearby comparison areas'
+        if nearby_position == 'similar_to_nearby_areas':
+            return f'{subject} similar to nearby comparison areas'
+        if nearby_position == 'somewhat_worse_than_nearby_areas':
+            return f'{subject} somewhat worse than nearby comparison areas'
+        if nearby_position == 'worse_than_nearby_areas':
+            return f'{subject} worse than nearby comparison areas'
+        return ''
+
+    def add_scaled_label(self, section_key, section, subject):
+        scale = self.concern_scale(section)
+        if scale:
+            self.add(section_key, f'{scale} {subject}')
+
+    def add_median_and_nearby_labels(self, section_key, section, subject):
+        self.add(section_key, self.ratio_label(subject, section.get('ratio_to_cape_town_median')))
+        self.add(section_key, self.nearby_label(subject, section.get('nearby_position')))
+
+    def raw_signals_for_section(self, section_key):
+        values = []
+        for signal in self.raw_signals.values():
+            if signal.get('section_key') == section_key:
+                values.append(signal)
+        return values
+
+    def add_raw_signal_labels(self, section_key):
+        concern_drivers = []
+        strength_drivers = []
+
+        for signal in self.raw_signals_for_section(section_key):
+            analysis = signal.get('analysis') or {}
+            trend = signal.get('trend') or {}
+            scale = self.scale_from_percentile(analysis.get('cape_town_percentile'))
+            subject = signal.get('label_subject')
+            concern_subject = signal.get('concern_subject')
+
+            if not scale or not subject:
+                continue
+
+            self.add(section_key, f'{scale} {subject}')
+
+            ratio_label = self.ratio_label(concern_subject, analysis.get('ratio_to_cape_town_median'))
+            self.add(section_key, ratio_label)
+
+            nearby_label = self.nearby_label(concern_subject, analysis.get('nearby_position'))
+            self.add(section_key, nearby_label)
+
+            trend_position = trend.get('trend_position')
+            if trend_position in ['improving', 'worsening']:
+                self.add(section_key, f'{concern_subject} trend {trend_position}')
+
+            if self.is_concern_scale(scale):
+                concern_drivers.append(f'{scale} {subject}')
+            elif self.is_strength_scale(scale):
+                strength_drivers.append(f'{scale} {subject}')
+
+        if concern_drivers:
+            section_name = self.driver_section_name(section_key)
+            self.add(section_key, f'{section_name} concern drivers: ' + '; '.join(concern_drivers))
+
+        if strength_drivers:
+            section_name = self.driver_section_name(section_key)
+            self.add(section_key, f'{section_name} strength drivers: ' + '; '.join(strength_drivers))
+
+    def driver_section_name(self, section_key):
+        names = {
+            'overall_safety': 'overall safety',
+            'direct_personal_safety': 'direct personal safety',
+            'residential_security': 'residential security',
+            'vehicle_security': 'vehicle security',
+            'public_movement_safety': 'public movement safety',
+            'solo_living_safety': 'solo-living safety',
+            'family_safety': 'family safety',
+        }
+        return names.get(section_key, section_key.replace('_', ' '))
+
+    def component_subject(self, category):
+        subjects = {
+            'overall_safety': 'overall crime concern',
+            'direct_personal_safety': 'direct personal crime',
+            'residential_security': 'residential security concern',
+            'vehicle_security': 'vehicle security concern',
+            'public_movement_safety': 'public movement concern',
+            'public_robbery_signal': 'public-facing robbery concern',
+        }
+        return subjects.get(category, str(category).replace('_', ' '))
+
+    def component_strength_subject(self, category):
+        subjects = {
+            'overall_safety': 'low overall crime concern',
+            'direct_personal_safety': 'low direct personal crime',
+            'residential_security': 'low residential security concern',
+            'vehicle_security': 'low vehicle security concern',
+            'public_movement_safety': 'low public movement concern',
+            'public_robbery_signal': 'low public-facing robbery concern',
+        }
+        return subjects.get(category, str(category).replace('_', ' '))
+
+    def add_component_driver_labels(self, section_key, concern_label, strength_label):
+        section = self.section(section_key)
+        components = section.get('composite_components') or []
+        concern_drivers = []
+        strength_drivers = []
+
+        for item in components:
+            category = item.get('category')
+            position = item.get('position')
+            concern_word = self.concern_word_from_position(position)
+
+            if self.is_concern_position(position):
+                concern_drivers.append(f'{concern_word} {self.component_subject(category)}')
+            elif self.is_strength_position(position):
+                strength_drivers.append(self.component_strength_subject(category))
+
+        if concern_drivers:
+            self.add(section_key, concern_label + ': ' + '; '.join(concern_drivers))
+        if strength_drivers:
+            self.add(section_key, strength_label + ': ' + '; '.join(strength_drivers))
+
+        if concern_drivers and strength_drivers:
+            self.add(section_key, f'mixed {self.driver_section_name(section_key)} profile with both strengths and concerns')
+        elif len(concern_drivers) >= 3:
+            self.add(section_key, f'multiple {self.driver_section_name(section_key)} crime concerns')
+        elif len(strength_drivers) >= 3:
+            self.add(section_key, f'strong all-round {self.driver_section_name(section_key)} signal from crime data')
+
+    def add_section_trend_overlay(self, section_key, subject, trend_key=None):
+        if trend_key is None:
+            trend_key = section_key
+
+        section = self.section(section_key)
+        trend_section = self.section('safety_trend')
+        trends = trend_section.get('category_trends') or {}
+        trend = trends.get(trend_key) or {}
+        trend_position = trend.get('trend_position')
+        scale = self.concern_scale(section)
+
+        if not trend_position:
+            return
+
+        if trend_position == 'improving':
+            self.add(section_key, f'{subject} trend improving')
+            if self.is_concern_scale(scale):
+                self.add(section_key, f'improving but still {scale} {subject}')
+        elif trend_position == 'worsening':
+            self.add(section_key, f'{subject} trend worsening')
+            if self.is_concern_scale(scale):
+                self.add(section_key, f'worsening {scale} {subject}')
+        elif trend_position == 'stable':
+            self.add(section_key, f'{subject} trend stable')
+            if self.is_concern_scale(scale):
+                self.add(section_key, f'stable but {scale} {subject}')
+            elif self.is_strength_scale(scale):
+                self.add(section_key, f'stable favourable {subject}')
+
+    def add_overall_safety_labels(self):
+        section_key = 'overall_safety'
+        section = self.section(section_key)
+        scale = self.concern_scale(section)
+
+        self.add_scaled_label(section_key, section, 'overall reported crime concern')
+        self.add_median_and_nearby_labels(section_key, section, 'overall crime concern')
+        self.add_section_trend_overlay(section_key, 'overall crime concern')
+
+        if scale in ['very low', 'low']:
+            self.add(section_key, 'strong low-crime area signal')
+            self.add(section_key, 'strong safety-first area match')
+        elif scale == 'lower':
+            self.add(section_key, 'lower-crime area signal')
+            self.add(section_key, 'good safety-first area match')
+        elif scale == 'typical':
+            self.add(section_key, 'typical overall crime profile')
+            self.add(section_key, 'average safety-first area match')
+        elif scale == 'elevated':
+            self.add(section_key, 'elevated overall crime profile')
+            self.add(section_key, 'weaker safety-first area match')
+        elif scale in ['high', 'very high']:
+            self.add(section_key, f'{scale} crime area signal')
+            self.add(section_key, 'weak safety-first area match')
+
+    def add_direct_personal_safety_labels(self):
+        section_key = 'direct_personal_safety'
+        section = self.section(section_key)
+        scale = self.concern_scale(section)
+
+        self.add_scaled_label(section_key, section, 'direct personal safety concern')
+        self.add_median_and_nearby_labels(section_key, section, 'direct personal crime concern')
+        self.add_section_trend_overlay(section_key, 'direct personal crime concern')
+
+        if scale in ['very low', 'low']:
+            self.add(section_key, 'strong personal safety signal from crime data')
+        elif scale == 'lower':
+            self.add(section_key, 'favourable personal safety profile')
+        elif scale == 'typical':
+            self.add(section_key, 'average personal crime profile')
+        elif scale == 'elevated':
+            self.add(section_key, 'weaker personal safety profile')
+        elif scale in ['high', 'very high']:
+            self.add(section_key, 'weak personal safety signal')
+            self.add(section_key, 'strong personal crime concern')
+
+        self.add_raw_signal_labels(section_key)
+
+    def add_residential_security_labels(self):
+        section_key = 'residential_security'
+        section = self.section(section_key)
+        scale = self.concern_scale(section)
+
+        self.add_scaled_label(section_key, section, 'residential security concern')
+        self.add_median_and_nearby_labels(section_key, section, 'residential security concern')
+        self.add_section_trend_overlay(section_key, 'residential security concern')
+
+        if scale in ['very low', 'low']:
+            self.add(section_key, 'strong home security signal from crime data')
+        elif scale == 'lower':
+            self.add(section_key, 'favourable home security profile')
+        elif scale == 'typical':
+            self.add(section_key, 'average home security crime profile')
+        elif scale == 'elevated':
+            self.add(section_key, 'weaker home security profile')
+        elif scale in ['high', 'very high']:
+            self.add(section_key, 'weak residential security signal')
+            self.add(section_key, 'home security is a major crime concern')
+
+        self.add_raw_signal_labels(section_key)
+
+    def add_vehicle_security_labels(self):
+        section_key = 'vehicle_security'
+        section = self.section(section_key)
+        scale = self.concern_scale(section)
+
+        self.add_scaled_label(section_key, section, 'vehicle security concern')
+        self.add_median_and_nearby_labels(section_key, section, 'vehicle security concern')
+        self.add_section_trend_overlay(section_key, 'vehicle security concern')
+
+        if scale in ['very low', 'low']:
+            self.add(section_key, 'strong vehicle safety signal from crime data')
+        elif scale == 'lower':
+            self.add(section_key, 'favourable car security profile')
+        elif scale == 'typical':
+            self.add(section_key, 'average vehicle crime profile')
+        elif scale == 'elevated':
+            self.add(section_key, 'weaker car security profile')
+            self.add(section_key, 'vehicle theft and break-in concern')
+        elif scale in ['high', 'very high']:
+            self.add(section_key, 'weak vehicle security signal')
+            self.add(section_key, 'strong vehicle theft and break-in concern')
+
+        self.add_raw_signal_labels(section_key)
+
+    def add_public_movement_safety_labels(self):
+        section_key = 'public_movement_safety'
+        section = self.section(section_key)
+        scale = self.concern_scale(section)
+
+        self.add_scaled_label(section_key, section, 'public movement safety concern')
+        self.add_median_and_nearby_labels(section_key, section, 'public movement safety concern')
+        self.add_section_trend_overlay(section_key, 'public movement safety concern', 'public_robbery_signal')
+
+        if scale in ['very low', 'low']:
+            self.add(section_key, 'strong outside-the-home safety signal from crime data')
+        elif scale == 'lower':
+            self.add(section_key, 'favourable public movement profile')
+        elif scale == 'typical':
+            self.add(section_key, 'average public-facing robbery profile')
+        elif scale == 'elevated':
+            self.add(section_key, 'weaker public movement profile')
+        elif scale in ['high', 'very high']:
+            self.add(section_key, 'weak public movement safety signal')
+            self.add(section_key, 'strong public-facing robbery concern')
+
+        self.add_component_driver_labels(
+            section_key,
+            'public movement concern drivers',
+            'public movement strength drivers',
+        )
+        self.add_raw_signal_labels(section_key)
+
+    def add_solo_living_safety_labels(self):
+        section_key = 'solo_living_safety'
+        section = self.section(section_key)
+        scale = self.concern_scale(section)
+
+        self.add_scaled_label(section_key, section, 'solo-living safety concern from crime indicators')
+
+        if scale in ['very low', 'low']:
+            self.add(section_key, 'strong solo-living safety profile from crime indicators')
+        elif scale == 'lower':
+            self.add(section_key, 'favourable solo-living safety profile from crime indicators')
+        elif scale == 'typical':
+            self.add(section_key, 'typical solo-living safety profile from crime indicators')
+        elif scale == 'elevated':
+            self.add(section_key, 'elevated solo-living safety concern from crime indicators')
+        elif scale in ['high', 'very high']:
+            self.add(section_key, 'high solo-living safety concern from crime indicators')
+            self.add(section_key, 'weak solo-living safety match from crime data')
+
+        self.add_component_driver_labels(
+            section_key,
+            'solo-living concern drivers',
+            'solo-living strength drivers',
+        )
+
+    def add_family_safety_labels(self):
+        section_key = 'family_safety'
+        section = self.section(section_key)
+        scale = self.concern_scale(section)
+
+        self.add_scaled_label(section_key, section, 'family safety concern from crime indicators')
+
+        if scale in ['very low', 'low']:
+            self.add(section_key, 'strong family safety profile from crime indicators')
+        elif scale == 'lower':
+            self.add(section_key, 'favourable family safety profile from crime indicators')
+        elif scale == 'typical':
+            self.add(section_key, 'typical family safety profile from crime indicators')
+        elif scale == 'elevated':
+            self.add(section_key, 'elevated family safety concern from crime indicators')
+        elif scale in ['high', 'very high']:
+            self.add(section_key, 'high family safety concern from crime indicators')
+            self.add(section_key, 'weak family safety match from crime indicators')
+
+        self.add_component_driver_labels(
+            section_key,
+            'family safety concern drivers',
+            'family safety strength drivers',
+        )
+
+    def add_nearby_safety_comparison_labels(self):
+        section_key = 'nearby_safety_comparison'
+        section = self.section(section_key)
+        position = section.get('position')
+
+        if position == 'better_than_nearby_areas':
+            self.add(section_key, 'safer than nearby comparison areas')
+            self.add(section_key, 'stronger safety profile than nearby areas')
+            self.add(section_key, 'better local safety comparison')
+        elif position == 'somewhat_better_than_nearby_areas':
+            self.add(section_key, 'somewhat safer than nearby comparison areas')
+            self.add(section_key, 'slightly stronger local safety profile')
+        elif position == 'mixed_or_similar_to_nearby_areas':
+            self.add(section_key, 'mixed or similar safety profile to nearby areas')
+            self.add(section_key, 'typical safety profile for nearby comparison group')
+        elif position == 'worse_than_nearby_areas':
+            self.add(section_key, 'worse than nearby comparison areas')
+            self.add(section_key, 'weaker than nearby alternatives')
+            self.add(section_key, 'poor local safety comparison')
+
+        comparisons = section.get('category_comparisons') or {}
+        worse_categories = []
+        better_categories = []
+
+        for name, item in comparisons.items():
+            display_name = self.driver_section_name(name)
+            nearby_position = item.get('nearby_position')
+
+            if nearby_position in ['better_than_nearby_areas', 'somewhat_better_than_nearby_areas']:
+                self.add(section_key, f'better nearby comparison for {display_name}')
+                better_categories.append(display_name)
+            elif nearby_position in ['worse_than_nearby_areas', 'somewhat_worse_than_nearby_areas']:
+                self.add(section_key, f'worse nearby comparison for {display_name}')
+                worse_categories.append(display_name)
+
+        if worse_categories:
+            self.add(section_key, 'nearby comparison weaknesses: ' + '; '.join(worse_categories))
+        if better_categories:
+            self.add(section_key, 'nearby comparison strengths: ' + '; '.join(better_categories))
+
+    def add_safety_trend_labels(self):
+        section_key = 'safety_trend'
+        section = self.section(section_key)
+        position = section.get('position')
+
+        if position == 'improving':
+            self.add(section_key, 'improving reported safety trend')
+            self.add(section_key, 'reported crime concern decreasing over time')
+        elif position == 'worsening':
+            self.add(section_key, 'worsening reported safety trend')
+            self.add(section_key, 'reported crime concern increasing over time')
+        elif position == 'stable_or_mixed':
+            self.add(section_key, 'stable or mixed reported safety trend')
+            self.add(section_key, 'crime profile not changing sharply')
+        elif position in ['insufficient_or_noisy_signal', 'insufficient_periods']:
+            self.add(section_key, 'uncertain reported safety trend')
+            self.add(section_key, 'limited trend signal')
+
+        trends = section.get('category_trends') or {}
+        for name, item in trends.items():
+            trend_position = item.get('trend_position')
+            display_name = self.driver_section_name(name)
+            if trend_position == 'improving':
+                self.add(section_key, f'{display_name} trend improving')
+            elif trend_position == 'worsening':
+                self.add(section_key, f'{display_name} trend worsening')
+            elif trend_position == 'stable':
+                self.add(section_key, f'{display_name} trend stable')
+
+    def add_data_confidence_and_coverage_labels(self):
+        section_key = 'data_confidence_and_coverage'
+        section = self.section(section_key)
+        confidence = section.get('overall_report_confidence')
+        geographic_confidence = section.get('geographic_confidence')
+        metric_confidence = section.get('metric_coverage_confidence')
+        comparison_confidence = section.get('comparison_confidence')
+        trend_confidence_value = section.get('trend_confidence')
+        primary_overlap = section.get('primary_overlap_percent')
+        linked_count = section.get('linked_precinct_count')
+
+        if confidence:
+            self.add(section_key, f'{confidence} confidence crime profile')
+        if metric_confidence == 'high':
+            self.add(section_key, 'strong crime data coverage')
+        elif metric_confidence == 'medium':
+            self.add(section_key, 'usable crime data coverage')
+        elif metric_confidence == 'low':
+            self.add(section_key, 'limited crime data coverage')
+
+        if geographic_confidence:
+            self.add(section_key, f'{geographic_confidence} geographic match confidence')
+        if comparison_confidence:
+            self.add(section_key, f'{comparison_confidence} comparison coverage')
+        if trend_confidence_value:
+            self.add(section_key, f'{trend_confidence_value} trend coverage')
+
+        if geographic_confidence == 'high':
+            self.add(section_key, 'strong precinct overlap match')
+        elif geographic_confidence == 'low':
+            self.add(section_key, 'weak precinct overlap match')
+
+        if linked_count == 1:
+            self.add(section_key, 'single-precinct area profile')
+        elif linked_count and linked_count > 1 and primary_overlap is not None and primary_overlap >= 85:
+            self.add(section_key, 'single-dominant precinct profile')
+        elif linked_count and linked_count > 1:
+            self.add(section_key, 'multi-precinct blended area profile')
+            self.add(section_key, 'split-precinct area profile')
+
+    def add_compound_profile_labels(self):
+        core_keys = [
+            'overall_safety',
+            'direct_personal_safety',
+            'residential_security',
+            'vehicle_security',
+            'public_movement_safety',
+        ]
+        concern_keys = []
+        high_keys = []
+        strength_keys = []
+
+        for section_key in core_keys:
+            scale = self.concern_scale(self.section(section_key))
+            if self.is_concern_scale(scale):
+                concern_keys.append(section_key)
+            if scale in ['high', 'very high']:
+                high_keys.append(section_key)
+            if self.is_strength_scale(scale):
+                strength_keys.append(section_key)
+
+        if len(strength_keys) >= 4:
+            self.add('overall_safety', 'broad low-crime profile')
+            self.add('overall_safety', 'strong all-round safety profile from crime data')
+        elif len(strength_keys) >= 3:
+            self.add('overall_safety', 'multiple favourable safety signals')
+
+        if len(concern_keys) >= 4:
+            self.add('overall_safety', 'broad elevated crime concern')
+            self.add('overall_safety', 'multiple safety categories show concern')
+            self.add('overall_safety', 'weak all-round safety profile from crime data')
+        elif len(concern_keys) >= 3:
+            self.add('overall_safety', 'multiple safety categories show concern')
+
+        if len(high_keys) >= 4:
+            self.add('overall_safety', 'broad high-crime profile')
+            self.add('overall_safety', 'multiple high-concern safety signals')
+            self.add('overall_safety', 'very weak safety-first search match')
+
+        if 'direct_personal_safety' in concern_keys and 'public_movement_safety' in concern_keys:
+            self.add('direct_personal_safety', 'personal safety and public movement concern')
+            self.add('public_movement_safety', 'personal safety and public movement concern')
+
+        if 'residential_security' in concern_keys and 'vehicle_security' in concern_keys:
+            self.add('residential_security', 'property and asset security concern')
+            self.add('vehicle_security', 'property and asset security concern')
+            self.add('overall_safety', 'property and asset security concern')
+
+        if 'vehicle_security' in concern_keys and len(concern_keys) == 1:
+            self.add('vehicle_security', 'vehicle-specific safety weakness')
+        if 'residential_security' in concern_keys and len(concern_keys) == 1:
+            self.add('residential_security', 'home-security-specific concern')
+        if 'public_movement_safety' in concern_keys and len(concern_keys) == 1:
+            self.add('public_movement_safety', 'public-facing safety is the main weakness')
+
+        overall_scale = self.concern_scale(self.section('overall_safety'))
+        trend_position = self.section('safety_trend').get('position')
+        if self.is_concern_scale(overall_scale) and trend_position == 'stable_or_mixed':
+            self.add('safety_trend', 'persistent elevated crime concern')
+            self.add('safety_trend', 'stable but higher-concern crime profile')
+        elif self.is_strength_scale(overall_scale) and trend_position == 'stable_or_mixed':
+            self.add('safety_trend', 'consistently lower-crime profile')
+            self.add('safety_trend', 'stable favourable safety profile')
+        elif self.is_concern_scale(overall_scale) and trend_position == 'worsening':
+            self.add('safety_trend', 'worsening high-concern crime profile')
+        elif self.is_concern_scale(overall_scale) and trend_position == 'improving':
+            self.add('safety_trend', 'improving but still elevated crime concern')
+
 
 
 # RAG report rendering
@@ -1310,8 +2091,9 @@ def format_confidence_section(lines, section):
     add_subsection(lines, 'Trend coverage', trend_lines)
 
 
-def format_section_for_llm(lines, heading, section_key, section):
+def format_section_for_llm(lines, heading, section_key, section, search_signal_labels=None):
     lines.append(f'[{heading}]')
+    add_subsection(lines, 'Derived search signals', search_signal_labels or [])
 
     if not section:
         lines.append('')
@@ -1362,19 +2144,26 @@ def format_crime_report_text(report):
     add_report_context(lines, report)
 
     sections = report.get('sections', {})
+    search_signal_labels = report.get('search_signal_labels', {})
     for heading, section_key in SECTION_ORDER:
-        format_section_for_llm(lines, heading, section_key, sections.get(section_key, {}))
+        format_section_for_llm(
+            lines,
+            heading,
+            section_key,
+            sections.get(section_key, {}),
+            search_signal_labels.get(section_key, []),
+        )
 
     return '\n'.join(lines).strip() + '\n'
 
 
 
 CRIME_LABEL_SYSTEM_PROMPT = (
-    'You are given a crime report about one area.\n',
-    'Rewrite the report into a rich, searchable place safety profile.\n',
-    'Keep the same section headings and order.\n',
-    'Under each heading, write compact full sentences that synthesize the evidence in that section.\n',
-    'Use the report evidence only.\n',
+    'You are given a crime report about one area.\n'
+    'Rewrite the report into a rich, searchable place safety profile.\n'
+    'Keep the same section headings and order.\n'
+    'Under each heading, write compact full sentences that synthesize the evidence in that section.\n'
+    'Use the report evidence only.\n'
     'Return only the headings and profile text.\n'
 )
 
