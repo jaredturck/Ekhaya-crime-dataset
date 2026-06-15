@@ -1369,7 +1369,14 @@ def format_crime_report_text(report):
 
 
 
-CRIME_LABEL_SYSTEM_PROMPT = 'You convert a crime report into search-friendly safety labels.\nKeep the same section headings and order.\nUnder each heading, write short labels, one per line.\nUse only the report evidence.\nReturn only the headings and labels.'
+CRIME_LABEL_SYSTEM_PROMPT = (
+    'You are given a crime report about one area.\n',
+    'Rewrite the report into a rich, searchable place safety profile.\n',
+    'Keep the same section headings and order.\n',
+    'Under each heading, write compact full sentences that synthesize the evidence in that section.\n',
+    'Use the report evidence only.\n',
+    'Return only the headings and profile text.\n'
+)
 
 _qwen_crime_label_model = None
 _qwen_crime_label_model_lock = threading.Lock()
