@@ -44,6 +44,7 @@ class CrimeArea(models.Model):
 
     shape_area = models.FloatField(null=True, blank=True)
     shape_length = models.FloatField(null=True, blank=True)
+    shape_length_alt = models.FloatField(null=True, blank=True)
 
     geometry = models.JSONField()
     raw_properties = models.JSONField(default=dict)
@@ -125,6 +126,7 @@ class SapsCrimeMetric(models.Model):
     comp_level = models.CharField(max_length=100, blank=True, default='')
     station_name = models.CharField(max_length=255, db_index=True)
     normalized_station_name = models.CharField(max_length=255, db_index=True)
+    station_crime_category = models.CharField(max_length=500, blank=True, default='')
 
     district = models.CharField(max_length=255, blank=True, default='')
     province = models.CharField(max_length=255, blank=True, default='')
@@ -135,14 +137,23 @@ class SapsCrimeMetric(models.Model):
     count_direction = models.CharField(max_length=100, blank=True, default='')
 
     period_name = models.CharField(max_length=255, db_index=True)
+    period_type = models.CharField(max_length=100, default='quarter_total')
     period_start = models.DateField(null=True, blank=True)
     period_end = models.DateField(null=True, blank=True)
 
     incidents = models.IntegerField()
 
+    crime_category_national_placement = models.CharField(max_length=100, blank=True, default='')
+    crime_category_provincial_placement = models.CharField(max_length=100, blank=True, default='')
+    national_contribution_placement = models.CharField(max_length=100, blank=True, default='')
+    national_count_diff_placement = models.CharField(max_length=100, blank=True, default='')
+    provincial_contribution_placement = models.CharField(max_length=100, blank=True, default='')
+    provincial_count_diff_placement = models.CharField(max_length=100, blank=True, default='')
+
     source_sheet = models.CharField(max_length=255, default='RAW Data')
     source_row = models.IntegerField(null=True, blank=True)
     source_column = models.CharField(max_length=255, blank=True, default='')
+    source_no = models.CharField(max_length=100, blank=True, default='')
 
     raw_values = models.JSONField(default=dict)
 
@@ -153,8 +164,11 @@ class SapsCrimeMetric(models.Model):
             models.Index(fields=['station_name']),
             models.Index(fields=['normalized_station_name']),
             models.Index(fields=['crime_category']),
+            models.Index(fields=['crime_group']),
             models.Index(fields=['period_name']),
+            models.Index(fields=['period_type']),
             models.Index(fields=['province', 'district']),
+            models.Index(fields=['period_start', 'period_end']),
         ]
 
     def __str__(self):
